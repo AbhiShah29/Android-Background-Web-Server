@@ -1,0 +1,4 @@
+include ':app'
+include ':svglib'
+project(':svglib').projectDir = new File('/home/abhi/CUSTOM PROJECTS LINK/Explore/Gitproject/Android-Background-Web-Server/External/library')
+
