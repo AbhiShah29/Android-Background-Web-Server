@@ -19,12 +19,14 @@ public class AndroidWebServer extends NanoHTTPD {
 
     @Override
     public Response serve(IHTTPSession session) {
-        String msg = "<html><body><h1>Hello server</h1>\n";
+        String msg = "<html><body>";
         Map<String, String> parms = session.getParms();
-        if (parms.get("username") == null) {
-            msg += "<form action='?' method='get'>\n  <p>Your name: <input type='text' name='username'></p>\n" + "</form>\n";
+        if (parms.get("firstname") == null) {
+//            msg += "<form action='?' method='get'>\n  <p>Your name: <input type='text' name='username'></p>\n" + "</form>\n";
+
+            msg += "<form action='?' method = 'get'>\n <p>First name: <input type='text' name='firstname'></p>\n <p>Last name: <input type='text' name='lastname'></p><br><br> <input type='submit' value='Submit'> </form>";
         } else {
-            msg += "<p>Hello, " + parms.get("username") + "!</p>";
+            msg += "<p>Hello, " + parms.get("firstname") +" "+parms.get("lastname") + "!</p>";
         }
         return newFixedLengthResponse( msg + "</body></html>\n" );
     }

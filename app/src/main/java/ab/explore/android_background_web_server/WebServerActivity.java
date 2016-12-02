@@ -1,11 +1,12 @@
 package ab.explore.android_background_web_server;
 
+import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.Intent;
-import android.content.IntentFilter;
+import android.content.res.ColorStateList;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
@@ -18,11 +19,9 @@ import android.support.annotation.Nullable;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -35,21 +34,25 @@ import com.pixplicity.sharp.SharpPicture;
 import uk.co.senab.photoview.PhotoViewAttacher;
 
 public class WebServerActivity extends AppCompatActivity {
-
+    String intentName="IntentName";
     private static final int DEFAULT_PORT = 8080;
-
+    private static boolean isStarted = false;
     // INSTANCE OF ANDROID WEB SERVER
     private AndroidWebServer androidWebServer;
     private BroadcastReceiver br_network_receiver;
-    private static boolean isStarted = false;
-
     private ImageView iv_server;
     private PhotoViewAttacher mAttacher;
     private Sharp mSvg;
-    private FloatingActionButton fab_connect;
-    private EditText et_Port;
-    private TextView tv_Message;
-    private TextView tv_IpAccess;
+    static FloatingActionButton fab_connect;
+    static EditText et_Port;
+    static TextView tv_Message;
+    public static TextView tv_IpAccess;
+    static WifiManager wifiManager;
+    private static String wifi_message = "You must connect to a WiFi network to use this service.";
+    private static String message = "You can now access the Android Web Server from a browser connected to the same wifi network.";
+    Intent intent = null;
+    static AppSharedPreference appSharedPreference;
+    static boolean isRunning = false;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -60,10 +63,8 @@ public class WebServerActivity extends AppCompatActivity {
 
         initComponent();
         prepareComponent();
-        setIpAccess();
         onClickListeners();
-        initBroadcastReceiverNetworkStateChanged();
-
+        setIpAccess(isRunning);
     }
 
     private void initComponent() {
@@ -72,6 +73,9 @@ public class WebServerActivity extends AppCompatActivity {
         et_Port = (EditText) findViewById(R.id.et_Port);
         tv_Message = (TextView) findViewById(R.id.tv_Message);
         tv_IpAccess = (TextView) findViewById(R.id.tv_IpAccess);
+        wifiManager = (WifiManager) getSystemService(WIFI_SERVICE);
+        appSharedPreference = new AppSharedPreference();
+        intent = new Intent(WebServerActivity.this, WSBackgroundService.class);
     }
 
     private void prepareComponent() {
@@ -79,34 +83,52 @@ public class WebServerActivity extends AppCompatActivity {
         mAttacher = new PhotoViewAttacher(iv_server);
         mAttacher.setMaximumScale(10f);
         mAttacher.setZoomable(false);
-        reloadSvg(false,1);
+        reloadSvg(false, 1);
 
         mSvg = Sharp.loadResource(getResources(), R.raw.ic_power);
         mAttacher = new PhotoViewAttacher(fab_connect);
         mAttacher.setMaximumScale(10f);
         mAttacher.setZoomable(false);
-        reloadSvg(false,2);
+        reloadSvg(false, 2);
+
+        isRunning = Boolean.parseBoolean(appSharedPreference.loadSavedPreferences(getApplicationContext(),"service_running"));
+        if(isRunning){
+            tv_Message.setText(getString(R.string.message));
+            fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorGreen));
+            et_Port.setEnabled(false);
+        }else{
+            tv_Message.setText("");
+            fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorRed));
+            et_Port.setEnabled(true);
+        }
     }
 
-    private void setIpAccess() {
-        tv_IpAccess.setText(getIpAccess());
+    public static void setIpAccess(boolean isRunning) {
+        tv_IpAccess.setText(getIpAccess(isRunning));
     }
 
     private void onClickListeners() {
         fab_connect.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (isConnectedInWifi()) {
-                    if (!isStarted && startAndroidWebServer()) {
-                        isStarted = true;
+                if(isConnectedInWifi()){
+                    if(isRunning){
+                        isRunning = false;
+                        appSharedPreference.savePreferences(WebServerActivity.this,"service_running",""+isRunning);
+                        tv_Message.setText("");
+                        fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorRed));
+                        et_Port.setEnabled(true);
+                        if(intent!=null){
+                            stopService(intent);
+                        }
+                    }else{
+                        isRunning = true;
+                        appSharedPreference.savePreferences(WebServerActivity.this,"service_running",""+isRunning);
+                        appSharedPreference.savePreferences(WebServerActivity.this,"port",""+getPortFromEditText());
+                        startService(intent);
                         tv_Message.setText(getString(R.string.message));
                         fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorGreen));
                         et_Port.setEnabled(false);
-                    } else if (stopAndroidWebServer()) {
-                        isStarted = false;
-                        tv_Message.setText(getString(R.string.wifi_message));
-                        fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorRed));
-                        et_Port.setEnabled(true);
                     }
                 } else {
                     Snackbar.make(v, getString(R.string.wifi_message), Snackbar.LENGTH_LONG).show();
@@ -115,69 +137,31 @@ public class WebServerActivity extends AppCompatActivity {
         });
     }
 
-    private void initBroadcastReceiverNetworkStateChanged() {
-        final IntentFilter filters = new IntentFilter();
-        filters.addAction("android.net.wifi.WIFI_STATE_CHANGED");
-        filters.addAction("android.net.wifi.STATE_CHANGE");
-        br_network_receiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                setIpAccess();
-            }
-        };
-        super.registerReceiver(br_network_receiver, filters);
-    }
 
 
-    //region Start And Stop AndroidWebServer
-    private boolean startAndroidWebServer() {
-        if (!isStarted) {
-            int port = getPortFromEditText();
-            try {
-                if (port == 0) {
-                    throw new Exception();
-                }
-                androidWebServer = new AndroidWebServer(port);
-                androidWebServer.start();
-                return true;
-            } catch (Exception e) {
-                e.printStackTrace();
-                Snackbar.make(fab_connect, "The PORT " + port + " doesn't work, please change it between 1000 and 9999.", Snackbar.LENGTH_LONG).show();
-            }
-        }
-        return false;
-    }
-
-    private boolean stopAndroidWebServer() {
-        if (isStarted && androidWebServer != null) {
-            androidWebServer.stop();
-            return true;
-        }
-        return false;
-    }
-    //endregion
-
-    //region Private utils Method
 
 
-    private String getIpAccess() {
-        WifiManager wifiManager = (WifiManager) getSystemService(WIFI_SERVICE);
+    private static String getIpAccess(boolean isRunning) {
+
         int ipAddress = wifiManager.getConnectionInfo().getIpAddress();
-        Log.e(this.getClass().getCanonicalName(),"IP: " + ipAddress);
-        if(ipAddress==0){
-            if(stopAndroidWebServer()){
-                isStarted = false;
-                tv_Message.setText(getString(R.string.wifi_message));
-                fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorRed));
+        Log.e("WebServerActivity", "IP: " + ipAddress);
+
+        if(isRunning){
+            if(ipAddress == 0){
+                tv_Message.setText(wifi_message);
+                fab_connect.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#FF4081")));
                 et_Port.setEnabled(true);
-            }else{
-                tv_Message.setText(getString(R.string.wifi_message));
-                fab_connect.setBackgroundTintList(ContextCompat.getColorStateList(WebServerActivity.this, R.color.colorRed));
-                et_Port.setEnabled(true);
+            }else {
+                tv_Message.setText(message);
+                fab_connect.setBackgroundTintList(ColorStateList.valueOf(Color.GREEN));
+                et_Port.setEnabled(false);
             }
         }else{
             tv_Message.setText("");
+            fab_connect.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#FF4081")));
+            et_Port.setEnabled(true);
         }
+
         final String formatedIpAddress = String.format("%d.%d.%d.%d", (ipAddress & 0xff), (ipAddress >> 8 & 0xff), (ipAddress >> 16 & 0xff), (ipAddress >> 24 & 0xff));
         return "http://" + formatedIpAddress + ":";
     }
@@ -188,7 +172,7 @@ public class WebServerActivity extends AppCompatActivity {
     }
 
     public boolean isConnectedInWifi() {
-        WifiManager wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+        @SuppressLint("WifiManagerLeak") WifiManager wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
         NetworkInfo networkInfo = ((ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE)).getActiveNetworkInfo();
         if (networkInfo != null && networkInfo.isAvailable() && networkInfo.isConnected()
                 && wifiManager.isWifiEnabled() && networkInfo.getTypeName().equals("WIFI")) {
@@ -198,35 +182,16 @@ public class WebServerActivity extends AppCompatActivity {
     }
     //endregion
 
-    public boolean onKeyDown(int keyCode, KeyEvent evt) {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (isStarted) {
-                new AlertDialog.Builder(this)
-                        .setTitle(R.string.warning)
-                        .setMessage(R.string.dialog_exit_message)
-                        .setPositiveButton(getResources().getString(android.R.string.ok), new DialogInterface.OnClickListener() {
-                            public void onClick(DialogInterface dialog, int id) {
-                                finish();
-                            }
-                        })
-                        .setNegativeButton(getResources().getString(android.R.string.cancel), null)
-                        .show();
-            } else {
-                finish();
-            }
-            return true;
-        }
-        return false;
+
+
+    @Override
+    public void onBackPressed() {
+        super.onBackPressed();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        stopAndroidWebServer();
-        isStarted = false;
-        if (br_network_receiver != null) {
-            unregisterReceiver(br_network_receiver);
-        }
     }
 
     private void reloadSvg(final boolean changeColor, final int who) {
@@ -270,10 +235,10 @@ public class WebServerActivity extends AppCompatActivity {
             @Override
             public void onPictureReady(SharpPicture picture) {
                 {
-                    if(who==1) {
+                    if (who == 1) {
                         Drawable drawable = picture.getDrawable(iv_server);
                         iv_server.setImageDrawable(drawable);
-                    }else if(who==2){
+                    } else if (who == 2) {
                         Drawable drawable = picture.getDrawable(fab_connect);
                         fab_connect.setImageDrawable(drawable);
                     }
@@ -283,7 +248,6 @@ public class WebServerActivity extends AppCompatActivity {
             }
         });
     }
-
 
 
 }
